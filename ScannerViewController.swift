@@ -39,6 +39,16 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
     
     private let width: CGFloat = UIScreen.main.bounds.width
     var fromVC: ScannerFrom
+
+    // MARK: - Grab-style scanner overlay
+    private let scanFrameSize: CGFloat = 260
+    private let scanFrameYOffset: CGFloat = 30
+    private let scanFrameCornerRadius: CGFloat = 12
+    private let scanLineInset: CGFloat = 4
+    private let scanLineAnimationDuration: TimeInterval = 1.8
+    private var scannerOverlayView: UIView?
+    private var scanLineView: UIView?
+    private var scanLineTopConstraint: NSLayoutConstraint?
     
     private var prevTag: Int?
     private var cameraVC: CameraViewController?
@@ -230,21 +240,139 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
         addChild(cameraVC)
         view.addSubview(cameraVC.view)
         cameraVC.didMove(toParent: self)
-        
+
         view.addSubview(topBarView)
         view.addSubview(scanFrame)
-        
+
+        addScannerOverlay()
+        addScanLine()
+
         NSLayoutConstraint.activate([
             topBarView.topAnchor.constraint(equalTo: self.view.topAnchor),
             topBarView.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
             topBarView.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
             topBarView.bottomAnchor.constraint(equalTo: switchQrStackView.bottomAnchor, constant: 22),
-            
-            scanFrame.widthAnchor.constraint(equalToConstant: 260),
-            scanFrame.heightAnchor.constraint(equalToConstant: 260),
+
+            scanFrame.widthAnchor.constraint(equalToConstant: scanFrameSize),
+            scanFrame.heightAnchor.constraint(equalToConstant: scanFrameSize),
             scanFrame.centerXAnchor.constraint(equalTo: self.view.centerXAnchor),
-            scanFrame.centerYAnchor.constraint(equalTo: self.view.centerYAnchor, constant: 30),
+            scanFrame.centerYAnchor.constraint(equalTo: self.view.centerYAnchor, constant: scanFrameYOffset),
         ])
+
+        // Start the scan line animation on the next run loop so constraints are resolved
+        DispatchQueue.main.async {
+            self.startScanLineAnimation()
+        }
+    }
+
+    // MARK: - Grab-style overlay helpers
+
+    private func addScannerOverlay() {
+        scannerOverlayView?.removeFromSuperview()
+
+        let overlay = UIView()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        overlay.isUserInteractionEnabled = false
+
+        // Insert below scanFrame so the corner-bracket image sits on top
+        view.insertSubview(overlay, belowSubview: scanFrame)
+        scannerOverlayView = overlay
+
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: view.topAnchor),
+            overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    private func addScanLine() {
+        scanLineView?.removeFromSuperview()
+        scanLineTopConstraint = nil
+
+        let scanLine = UIView()
+        scanLine.translatesAutoresizingMaskIntoConstraints = false
+        scanLine.backgroundColor = UIColor(red: 0.0, green: 0.85, blue: 0.45, alpha: 1.0)
+        scanLine.layer.shadowColor = UIColor(red: 0.0, green: 0.85, blue: 0.45, alpha: 1.0).cgColor
+        scanLine.layer.shadowOffset = .zero
+        scanLine.layer.shadowRadius = 6
+        scanLine.layer.shadowOpacity = 0.9
+        scanLine.isUserInteractionEnabled = false
+
+        view.addSubview(scanLine)
+        view.bringSubviewToFront(scanLine)
+        scanLineView = scanLine
+
+        let topC = scanLine.topAnchor.constraint(equalTo: scanFrame.topAnchor, constant: 2)
+        scanLineTopConstraint = topC
+
+        NSLayoutConstraint.activate([
+            topC,
+            scanLine.leadingAnchor.constraint(equalTo: scanFrame.leadingAnchor, constant: 4),
+            scanLine.trailingAnchor.constraint(equalTo: scanFrame.trailingAnchor, constant: -4),
+            scanLine.heightAnchor.constraint(equalToConstant: 2),
+        ])
+    }
+
+    private func startScanLineAnimation() {
+        guard let topC = scanLineTopConstraint else { return }
+
+        scanLineView?.layer.removeAllAnimations()
+        topC.constant = scanLineInset
+        view.layoutIfNeeded()
+
+        func animateDown() {
+            topC.constant = scanFrameSize - scanLineInset
+            UIView.animate(withDuration: scanLineAnimationDuration, delay: 0, options: [.curveEaseInOut], animations: { [weak self] in
+                self?.view.layoutIfNeeded()
+            }) { [weak self] finished in
+                guard finished, self != nil else { return }
+                animateUp()
+            }
+        }
+
+        func animateUp() {
+            topC.constant = scanLineInset
+            UIView.animate(withDuration: scanLineAnimationDuration, delay: 0, options: [.curveEaseInOut], animations: { [weak self] in
+                self?.view.layoutIfNeeded()
+            }) { [weak self] finished in
+                guard finished, self != nil else { return }
+                animateDown()
+            }
+        }
+
+        animateDown()
+    }
+
+    private func stopScanLineAnimation() {
+        scanLineView?.layer.removeAllAnimations()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateOverlayMask()
+    }
+
+    private func updateOverlayMask() {
+        guard let overlay = scannerOverlayView else { return }
+
+        let scanRect = CGRect(
+            x: (view.bounds.width - scanFrameSize) / 2,
+            y: view.bounds.height / 2 - scanFrameSize / 2 + scanFrameYOffset,
+            width: scanFrameSize,
+            height: scanFrameSize
+        )
+
+        let fullPath = UIBezierPath(rect: overlay.bounds)
+        let holePath = UIBezierPath(roundedRect: scanRect, cornerRadius: scanFrameCornerRadius)
+        fullPath.append(holePath)
+        fullPath.usesEvenOddFillRule = true
+
+        let maskLayer = CAShapeLayer()
+        maskLayer.path = fullPath.cgPath
+        maskLayer.fillRule = .evenOdd
+        overlay.layer.mask = maskLayer
     }
     
     private func removeCameraUI() {
@@ -254,9 +382,16 @@ class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDel
             cameraVC.view.removeFromSuperview()
             cameraVC.removeFromParent()
         }
-        
+
         // Remove overlays
         scanFrame.removeFromSuperview()
+
+        stopScanLineAnimation()
+        scanLineView?.removeFromSuperview()
+        scanLineView = nil
+        scanLineTopConstraint = nil
+        scannerOverlayView?.removeFromSuperview()
+        scannerOverlayView = nil
     }
     
     private func checkCameraPermission() {
